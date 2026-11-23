@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virtual Hide & Seek — Prototype</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    :root { --bg:#0b1220; --panel:#121d30; --panel2:#18263d; --text:#edf3ff; --muted:#9aabc5; --accent:#6ee7b7; --blue:#72a7ff; --danger:#ff8585; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,system-ui,Arial,sans-serif; color:var(--text); background:var(--bg); }
+    header { padding:18px 22px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid #26344a; }
+    header h1 { margin:0; font-size:20px; letter-spacing:.2px; }
+    header span { color:var(--muted); font-size:12px; }
+    .layout { display:grid; grid-template-columns:340px 1fr; min-height:calc(100vh - 65px); }
+    aside { padding:18px; background:var(--panel); border-right:1px solid #26344a; overflow:auto; }
+    main { min-width:0; display:flex; flex-direction:column; }
+    #map { flex:1; min-height:520px; background:#dbe4ed; }
+    .card { background:var(--panel2); border:1px solid #2b3b55; border-radius:13px; padding:14px; margin-bottom:13px; }
+    h2 { font-size:14px; margin:0 0 10px; }
+    p { color:var(--muted); font-size:13px; line-height:1.5; margin:7px 0; }
+    .status { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .pill { font-size:11px; padding:5px 9px; border-radius:99px; background:#233a50; color:var(--accent); }
+    .timer { font-size:26px; font-weight:750; letter-spacing:1px; }
+    button { border:0; border-radius:9px; padding:10px 12px; background:#29415f; color:var(--text); font-weight:650; cursor:pointer; font-size:12px; }
+    button:hover { filter:brightness(1.15); }
+    button.primary { background:#167c61; }
+    button.blue { background:#315eaa; }
+    button.warn { background:#754747; }
+    button:disabled { opacity:.4; cursor:not-allowed; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    .row button { flex:1; }
+    label { display:block; color:var(--muted); font-size:12px; margin:10px 0 5px; }
+    input, select { width:100%; border:1px solid #344760; border-radius:8px; padding:10px; color:var(--text); background:#0e192a; }
+    #message { min-height:54px; }
+    #clueList { padding-left:18px; color:#dce8fa; font-size:13px; line-height:1.6; }
+    .toolbar { padding:10px 14px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:#101a2a; border-bottom:1px solid #26344a; }
+    .toolbar .hint { color:var(--muted); font-size:12px; margin-left:auto; }
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip { background:#17263b; color:#edf3ff; }
+    .leaflet-control-attribution { font-size:10px !important; }
+    @media(max-width:800px) {
+      .layout { grid-template-columns:1fr; }
+      aside { border-right:0; border-bottom:1px solid #26344a; }
+      #map { min-height:55vh; }
+      header { align-items:flex-start; flex-direction:column; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🌍 Virtual Hide & Seek</h1>
+  <span>Prototype • Peta OpenStreetMap + Leaflet • Tanpa Google Maps API Key</span>
+</header>
+
+<div class="layout">
+  <aside>
+    <section class="card">
+      <div class="status"><h2>STATUS PERMAINAN</h2><span class="pill" id="phasePill">PENYEMBUNYI</span></div>
+      <div class="timer" id="timer">05:00</div>
+      <p id="phaseText">Penyembunyi: klik peta untuk memilih lokasi persembunyian.</p>
+      <div class="row">
+        <button class="primary" id="lockBtn">Kunci Lokasi</button>
+        <button id="resetBtn">Mulai Ulang</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>PEMAIN</h2>
+      <label for="roleSelect">Mode pemain</label>
+      <select id="roleSelect">
+        <option value="hider">Penyembunyi — pilih tempat</option>
+        <option value="seeker">Pencari — investigasi</option>
+      </select>
+      <p id="roleHelp">Pilih satu titik di peta sebagai lokasi persembunyian.</p>
+      <div class="row">
+        <button class="blue" id="startSeekBtn">Mulai Pencarian</button>
+        <button id="newRoundBtn">Babak Baru</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>ALAT INVESTIGASI</h2>
+      <p>Scanner ini masih berupa simulasi untuk demo gameplay, bukan pendeteksi anomali sungguhan pada citra peta.</p>
+      <div class="row">
+        <button id="scanBtn" class="blue">🔎 Pindai Area</button>
+        <button id="clueBtn">💡 Minta Petunjuk</button>
+      </div>
+      <p id="message">Belum ada hasil investigasi.</p>
+      <ul id="clueList"></ul>
+    </section>
+
+    <section class="card">
+      <h2>TEBAKAN PENCARI</h2>
+      <p>Klik titik pada peta untuk menandai tebakan, lalu periksa hasilnya.</p>
+      <div class="row">
+        <button id="guessBtn" class="primary">Periksa Tebakan</button>
+        <button id="clearGuessBtn">Hapus Tebakan</button>
+      </div>
+      <p id="guessResult">Belum ada tebakan.</p>
+    </section>
+
+    <section class="card">
+      <h2>CATATAN PETA</h2>
+      <p>Peta dasar menggunakan OpenStreetMap. Tombol satelit dan Street View belum diaktifkan karena keduanya membutuhkan penyedia citra/foto jalanan dengan ketentuan penggunaan tersendiri.</p>
+      <p>Gunakan peta secara interaktif dan wajar. Jangan mengunduh atau menyimpan tile peta secara massal.</p>
+    </section>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <button class="primary" id="mapLayerBtn">🗺️ Peta Standar</button>
+      <button id="satelliteBtn">🛰️ Satelit (belum tersedia)</button>
+      <button id="streetBtn">📍 Street View (belum tersedia)</button>
+      <span class="hint">Klik peta untuk memilih lokasi / tebakan</span>
+    </div>
+    <div id="map"></div>
+  </main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(() => {
+  const map = L.map('map', { zoomControl: true }).setView([-6.9147, 107.6098], 13);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>'
+  }).addTo(map);
+
+  const $ = id => document.getElementById(id);
+  let phase = 'hider';
+  let hidePoint = null;
+  let hideMarker = null;
+  let guessPoint = null;
+  let guessMarker = null;
+  let clueCount = 0;
+  let seconds = 300;
+  let timerId = null;
+  let scans = 0;
+
+  const clues = [
+    'Lokasi berada di area yang cukup dekat dengan jalan utama.',
+    'Di sekitar lokasi terdapat beberapa bangunan atau fasilitas.',
+    'Lokasi tidak jauh dari area yang lebih ramai.',
+    'Perhatikan area yang memiliki akses jalan kecil atau lingkungan lokal.'
+  ];
+
+  function setMessage(text) { $('message').textContent = text; }
+  function updatePhase() {
+    $('phasePill').textContent = phase === 'hider' ? 'PENYEMBUNYI' : phase === 'seeker' ? 'PENCARI' : 'SELESAI';
+    $('phaseText').textContent = phase === 'hider'
+      ? 'Penyembunyi: klik peta untuk memilih lokasi persembunyian.'
+      : phase === 'seeker'
+        ? 'Pencari: telusuri peta, gunakan scanner, lalu tandai tebakan.'
+        : 'Babak selesai. Mulai babak baru untuk bermain lagi.';
+    $('roleSelect').value = phase === 'hider' ? 'hider' : 'seeker';
+    $('lockBtn').disabled = phase !== 'hider' || !hidePoint;
+    $('startSeekBtn').disabled = phase !== 'hider' || !hidePoint;
+    $('scanBtn').disabled = phase !== 'seeker';
+    $('clueBtn').disabled = phase !== 'seeker' || clueCount >= clues.length;
+    $('guessBtn').disabled = phase !== 'seeker' || !guessPoint;
+  }
+
+  function formatTime(s) {
+    return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  }
+  function stopTimer() { if (timerId) clearInterval(timerId); timerId = null; }
+  function startTimer() {
+    stopTimer();
+    seconds = 300;
+    $('timer').textContent = formatTime(seconds);
+    timerId = setInterval(() => {
+      seconds--;
+      $('timer').textContent = formatTime(Math.max(0, seconds));
+      if (seconds <= 0) {
+        stopTimer();
+        phase = 'done';
+        updatePhase();
+        setMessage('Waktu habis! Babak berakhir.');
+      }
+    }, 1000);
+  }
+
+  map.on('click', e => {
+    const point = { lat: e.latlng.lat, lng: e.latlng.lng };
+    if (phase === 'hider') {
+      hidePoint = point;
+      if (hideMarker) map.removeLayer(hideMarker);
+      hideMarker = L.marker(e.latlng).addTo(map).bindPopup('Lokasi persembunyian (belum dikunci)').openPopup();
+      setMessage('Lokasi dipilih. Tekan “Kunci Lokasi” jika sudah yakin.');
+    } else if (phase === 'seeker') {
+      guessPoint = point;
+      if (guessMarker) map.removeLayer(guessMarker);
+      guessMarker = L.marker(e.latlng).addTo(map).bindPopup('Titik tebakan').openPopup();
+      $('guessResult').textContent = 'Tebakan sudah ditandai. Tekan “Periksa Tebakan”.';
+    }
+    updatePhase();
+  });
+
+  function beginSearch() {
+    if (!hidePoint) return;
+    phase = 'seeker';
+    if (hideMarker) { map.removeLayer(hideMarker); hideMarker = null; }
+    guessPoint = null;
+    if (guessMarker) { map.removeLayer(guessMarker); guessMarker = null; }
+    clueCount = 0;
+    scans = 0;
+    $('clueList').innerHTML = '';
+    $('guessResult').textContent = 'Belum ada tebakan.';
+    setMessage('Pencarian dimulai. Gunakan alat investigasi untuk mencari petunjuk.');
+    startTimer();
+    updatePhase();
+  }
+
+  $('lockBtn').addEventListener('click', () => {
+    if (!hidePoint) return;
+    hideMarker.bindPopup('Lokasi persembunyian terkunci').closePopup();
+    setMessage('Lokasi berhasil dikunci. Sekarang mulai pencarian.');
+    $('startSeekBtn').focus();
+  });
+  $('startSeekBtn').addEventListener('click', beginSearch);
+  $('roleSelect').addEventListener('change', e => {
+    if (e.target.value === 'seeker' && hidePoint && phase === 'hider') beginSearch();
+    else if (e.target.value === 'hider' && phase === 'seeker') {
+      setMessage('Babak sedang berlangsung. Tekan “Mulai Ulang” untuk mengatur ulang.');
+      $('roleSelect').value = 'seeker';
+    }
+  });
+
+  $('scanBtn').addEventListener('click', () => {
+    if (phase !== 'seeker') return;
+    scans++;
+    const results = [
+      'Tidak ada anomali yang menonjol pada simulasi area ini.',
+      'Ada kemungkinan titik menarik di sekitar area permukiman.',
+      'Scanner menemukan area yang layak diperiksa lebih lanjut.',
+      'Beberapa objek di area ini tampak menarik untuk investigasi.'
+    ];
+    setMessage('Hasil pemindaian #' + scans + ': ' + results[Math.floor(Math.random() * results.length)]);
+  });
+
+  $('clueBtn').addEventListener('click', () => {
+    if (phase !== 'seeker' || clueCount >= clues.length) return;
+    const li = document.createElement('li');
+    li.textContent = clues[clueCount++];
+    $('clueList').appendChild(li);
+    updatePhase();
+  });
+
+  $('guessBtn').addEventListener('click', () => {
+    if (!guessPoint || !hidePoint || phase !== 'seeker') return;
+    const a = L.latLng(guessPoint.lat, guessPoint.lng);
+    const b = L.latLng(hidePoint.lat, hidePoint.lng);
+    const distance = a.distanceTo(b);
+    if (distance <= 150) {
+      $('guessResult').textContent = '🎉 Benar! Lokasi ditemukan (jarak ' + Math.round(distance) + ' meter).';
+      setMessage('Pencari berhasil menemukan lokasi persembunyian!');
+      phase = 'done';
+      stopTimer();
+    } else {
+      $('guessResult').textContent = 'Belum tepat. Jarak tebakan sekitar ' + (distance >= 1000 ? (distance / 1000).toFixed(2) + ' km' : Math.round(distance) + ' meter') + '.';
+    }
+    updatePhase();
+  });
+
+  $('clearGuessBtn').addEventListener('click', () => {
+    guessPoint = null;
+    if (guessMarker) map.removeLayer(guessMarker);
+    guessMarker = null;
+    $('guessResult').textContent = 'Tebakan dihapus.';
+    updatePhase();
+  });
+
+  function resetGame() {
+    stopTimer();
+    phase = 'hider';
+    hidePoint = null;
+    guessPoint = null;
+    clueCount = 0;
+    scans = 0;
+    seconds = 300;
+    if (hideMarker) map.removeLayer(hideMarker);
+    if (guessMarker) map.removeLayer(guessMarker);
+    hideMarker = guessMarker = null;
+    $('timer').textContent = '05:00';
+    $('clueList').innerHTML = '';
+    $('guessResult').textContent = 'Belum ada tebakan.';
+    setMessage('Babak baru. Penyembunyi dapat memilih lokasi di peta.');
+    updatePhase();
+  }
+  $('resetBtn').addEventListener('click', resetGame);
+  $('newRoundBtn').addEventListener('click', resetGame);
+
+  $('satelliteBtn').addEventListener('click', () => alert('Layer satelit belum terhubung. Dibutuhkan penyedia citra satelit yang mengizinkan penggunaan sesuai kebutuhan game.'));
+  $('streetBtn').addEventListener('click', () => alert('Street View belum terhubung. Dibutuhkan penyedia foto jalanan dengan cakupan dan ketentuan penggunaan yang sesuai.'));
+  $('mapLayerBtn').addEventListener('click', () => map.invalidateSize());
+
+  updatePhase();
+})();
+</script>
+</body>
+</html>
