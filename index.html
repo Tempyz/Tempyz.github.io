@@ -94,6 +94,7 @@ button{font:inherit;cursor:pointer}
 
 <nav class="left-tools" aria-label="Tools pencarian">
  <button class="tool-btn" id="scanBtn" title="Area Pulse Scan" aria-label="Area Pulse Scan" disabled>⌁<span class="tip">Area Pulse Scan</span></button>
+ <button class="tool-btn" id="sectorBtn" title="Direction Sector" aria-label="Direction Sector" disabled>◔<span class="tip">Direction Sector</span></button>
  <button class="tool-btn" id="clueBtn" title="Request Clue" aria-label="Request Clue" disabled>⌕<span class="tip">Request Clue</span></button>
  <button class="tool-btn" id="guessModeBtn" title="Mode tebakan" aria-label="Mode tebakan" disabled>◎<span class="tip">Mode tebakan</span></button>
 </nav>
@@ -156,6 +157,8 @@ button{font:inherit;cursor:pointer}
 
  let phase='hider',hidePoint=null,hideMarker=null,guessPoint=null,guessMarker=null;
  let locked=false,seconds=ROUND_SECONDS,timerId=null,scans=0,clues=0,scanCircle=null,guessMode=false;
+ const SECTOR_DETECTION_RADIUS=500000, SECTOR_SCREEN_LENGTH=180, SECTOR_WIDTH=40;
+ let sectorMode=false,sectorOrigin=null,sectorRange=null,sectorWedge=null,sectorMarker=null;
  const clueData=[
   'Lokasi berada relatif dekat dengan jalan utama.',
   'Di sekitar lokasi terdapat bangunan atau fasilitas.',
@@ -182,8 +185,9 @@ button{font:inherit;cursor:pointer}
   $('mainAction').textContent=phase==='hider'?(locked?'MULAI MENCARI':'KUNCI LOKASI'):phase==='seeker'?'CARI HIDER':'BABAK SELESAI';
   $('mainAction').disabled=phase==='done'||(phase==='hider'&&!hidePoint);
   $('roleBtn').textContent=phase==='seeker'?'⌕ SEEKER':'◈ HIDER';
-  $('scanBtn').disabled=phase!=='seeker';$('clueBtn').disabled=phase!=='seeker'||clues>=clueData.length;
+  $('scanBtn').disabled=phase!=='seeker';$('sectorBtn').disabled=phase!=='seeker';$('clueBtn').disabled=phase!=='seeker'||clues>=clueData.length;
   $('guessModeBtn').disabled=phase!=='seeker';
+  $('sectorBtn').classList.toggle('active',sectorMode);
   $('guessModeBtn').classList.toggle('active',guessMode);
   $('panelResult').textContent=phase==='hider'?(locked?'Lokasi terkunci. Siap memulai pencarian.':'Pilih lokasi di peta, lalu kunci lokasi.'):(phase==='seeker'?'Pencarian aktif. Gunakan ikon tools di sisi kiri.':'Ronde selesai. Mulai babak baru untuk bermain lagi.');
   $('intelCount').textContent=clues+' / '+clueData.length+' clues collected';
@@ -193,9 +197,65 @@ button{font:inherit;cursor:pointer}
   stopTimer();seconds=ROUND_SECONDS;update();
   timerId=setInterval(()=>{
    seconds=Math.max(0,seconds-1);$('timer').textContent=timeText(seconds);
-   if(seconds===0){stopTimer();phase='done';guessMode=false;update();notify('Waktu habis — Hider memenangkan ronde.');log('Time expired. Hider wins.')}
+   if(seconds===0){stopTimer();phase='done';guessMode=false;sectorMode=false;update();notify('Waktu habis — Hider memenangkan ronde.');log('Time expired. Hider wins.')}
   },1000);
  }
+ function destinationPoint(origin,bearingDeg,distanceM){
+  const R=6371000, br=bearingDeg*Math.PI/180, lat1=origin.lat*Math.PI/180, lon1=origin.lng*Math.PI/180, d=distanceM/R;
+  const lat2=Math.asin(Math.sin(lat1)*Math.cos(d)+Math.cos(lat1)*Math.sin(d)*Math.cos(br));
+  const lon2=lon1+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(lat1),Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+  return [lat2*180/Math.PI,lon2*180/Math.PI];
+ }
+ function bearingBetween(a,b){
+  const p1=a.lat*Math.PI/180,p2=b.lat*Math.PI/180,dl=(b.lng-a.lng)*Math.PI/180;
+  const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+ }
+ function clearSector(){
+  [sectorRange,sectorWedge,sectorMarker].forEach(layer=>{if(layer)map.removeLayer(layer)});
+  sectorRange=sectorWedge=sectorMarker=null;sectorOrigin=null;sectorMode=false;
+ }
+ function getSectorVisualLength(bearing){
+  if(!sectorOrigin)return 10000;
+  const originLL=L.latLng(sectorOrigin.lat,sectorOrigin.lng);
+  const originPx=map.latLngToContainerPoint(originLL);
+  const rad=bearing*Math.PI/180;
+  const targetPx=L.point(originPx.x+Math.sin(rad)*SECTOR_SCREEN_LENGTH,originPx.y-Math.cos(rad)*SECTOR_SCREEN_LENGTH);
+  const targetLL=map.containerPointToLatLng(targetPx);
+  return Math.max(1,originLL.distanceTo(targetLL));
+ }
+ function renderSector(quiet=false){
+  if(!sectorOrigin||!hidePoint)return;
+  const originLL=L.latLng(sectorOrigin.lat,sectorOrigin.lng),hiderLL=L.latLng(hidePoint.lat,hidePoint.lng);
+  const distance=originLL.distanceTo(hiderLL),detected=distance<=SECTOR_DETECTION_RADIUS;
+  const bearing=detected?bearingBetween(sectorOrigin,hidePoint):0;
+  const visualLength=getSectorVisualLength(bearing);
+  if(sectorWedge)map.removeLayer(sectorWedge);
+  const arc=[];
+  for(let a=bearing-SECTOR_WIDTH/2;a<=bearing+SECTOR_WIDTH/2+0.1;a+=2){arc.push(destinationPoint(sectorOrigin,a,visualLength));}
+  const color=detected?'#58e2b1':'#f1bf70';
+  sectorWedge=L.polygon([[sectorOrigin.lat,sectorOrigin.lng],...arc,[sectorOrigin.lat,sectorOrigin.lng]],{
+   color,weight:2,fillColor:color,fillOpacity:.22,interactive:false
+  }).addTo(map);
+  if(sectorMarker){sectorMarker.setStyle({color,fillColor:color});}
+  $('intelText').textContent=detected
+   ?'DIRECTION SECTOR · SIGNAL DETECTED. Hider berada dalam radius 500 km. Juring menunjukkan arah umum, tetapi tidak menunjukkan jarak atau posisi persis.'
+   :'DIRECTION SECTOR · NO SIGNAL. Hider berada di luar radius deteksi 500 km.';
+  $('intelPanel').classList.add('open');
+  if(!quiet){
+   log(detected?'Direction Sector acquired a bearing.':'Direction Sector found no signal in range.');
+   notify(detected?'Sinyal ditemukan — juring mengarah ke Hider.':'Tidak ada sinyal — Hider di luar jangkauan.');
+  }
+ }
+ function placeSector(point){
+  clearSector();sectorOrigin=point;
+  sectorRange=L.circle([point.lat,point.lng],{radius:SECTOR_DETECTION_RADIUS,color:'#70adff',weight:1,dashArray:'5 7',fillColor:'#70adff',fillOpacity:.035,interactive:false}).addTo(map);
+  map.fitBounds(sectorRange.getBounds(),{padding:[36,36],maxZoom:7});
+  sectorMarker=L.circleMarker([point.lat,point.lng],{radius:6,color:'#58e2b1',weight:2,fillColor:'#58e2b1',fillOpacity:.9}).addTo(map).bindPopup('Direction Sector · Sensor Origin');
+  renderSector();update();
+ }
+ map.on('zoomend',()=>{if(sectorOrigin)renderSector(true)});
+
  function beginSearch(){
   if(phase!=='hider'||!locked||!hidePoint)return;
   phase='seeker';guessMode=false;
@@ -207,8 +267,8 @@ button{font:inherit;cursor:pointer}
  }
  function reset(){
   stopTimer();phase='hider';hidePoint=null;guessPoint=null;locked=false;seconds=ROUND_SECONDS;scans=0;clues=0;guessMode=false;
-  [hideMarker,guessMarker,scanCircle].forEach(x=>{if(x)map.removeLayer(x)});
-  hideMarker=guessMarker=scanCircle=null;
+  [hideMarker,guessMarker,scanCircle,sectorRange,sectorWedge,sectorMarker].forEach(x=>{if(x)map.removeLayer(x)});
+  hideMarker=guessMarker=scanCircle=sectorRange=sectorWedge=sectorMarker=null;sectorOrigin=null;sectorMode=false;
   $('coordinates').textContent='LAT -- / LNG --';$('intelText').textContent='Belum ada intel.';
   $('logPanel').classList.remove('open');$('intelPanel').classList.remove('open');
   $('activityLog').innerHTML='';log('New round initialized. Select a hiding point.');
@@ -217,7 +277,9 @@ button{font:inherit;cursor:pointer}
  map.on('click',e=>{
   const p={lat:e.latlng.lat,lng:e.latlng.lng};
   $('coordinates').textContent='LAT '+p.lat.toFixed(4)+' / LNG '+p.lng.toFixed(4);
-  if(phase==='hider'&&!locked){
+  if(phase==='seeker'&&sectorMode){
+   placeSector(p);sectorMode=false;update();
+  }else if(phase==='hider'&&!locked){
    hidePoint=p;if(hideMarker)map.removeLayer(hideMarker);
    hideMarker=L.marker(e.latlng).addTo(map).bindPopup('Hider location · not locked').openPopup();
    notify('Lokasi dipilih. Tombol KUNCI LOKASI sekarang aktif.');log('Hider location selected.');
@@ -236,7 +298,7 @@ button{font:inherit;cursor:pointer}
   else if(phase==='seeker'&&guessPoint&&hidePoint){
    const dist=L.latLng(guessPoint.lat,guessPoint.lng).distanceTo(L.latLng(hidePoint.lat,hidePoint.lng));
    if(dist<=TOLERANCE){
-    phase='done';stopTimer();guessMode=false;notify('Hider ditemukan! Seeker menang.');log('Hider found. Seeker wins.');
+    phase='done';stopTimer();guessMode=false;sectorMode=false;notify('Hider ditemukan! Seeker menang.');log('Hider found. Seeker wins.');
    }else{
     const d=dist>=1000?(dist/1000).toFixed(2)+' km':Math.round(dist)+' m';
     notify('Belum tepat · perkiraan jarak '+d);log('Guess checked. Distance: '+d);
@@ -260,6 +322,13 @@ button{font:inherit;cursor:pointer}
   }
   $('intelText').textContent='SCAN #'+scans+' · '+result;$('intelPanel').classList.add('open');
   notify('Area pulse scan selesai.');log('Area scan #'+scans+' completed.');update();
+ });
+ $('sectorBtn').addEventListener('click',()=>{
+  if(phase!=='seeker')return;
+  sectorMode=!sectorMode;
+  update();
+  if(sectorMode)notify('Pilih titik pusat sensor pada peta. Radius deteksi 500 km; panjang juring menyesuaikan zoom agar ukurannya tetap sekitar 180 piksel di layar.');
+  else notify('Penempatan Direction Sector dibatalkan.');
  });
  $('clueBtn').addEventListener('click',()=>{
   if(phase!=='seeker'||clues>=clueData.length)return;
